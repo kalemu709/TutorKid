@@ -1,0 +1,16 @@
+{
+  "name": "chinese-character-practice-ui",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Readable React source and a locally bundled browser app",
+  "scripts": {
+    "build": "esbuild app.jsx --bundle --minify --jsx=automatic --outfile=app.js"
+  },
+  "dependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

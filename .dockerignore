@@ -1,0 +1,14 @@
+.git
+.gitignore
+.DS_Store
+__pycache__/
+*.py[cod]
+*.map
+node_modules/
+.venv/
+venv/
+toreviw/
+.env
+.env.*
+README.md
+app.js

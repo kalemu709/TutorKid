@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# Build output (npm run build)
+app.js
+*.map
+
+# Secrets
+.env
+.env.*
+
+# Local app data
+toreviw/
