@@ -31,7 +31,10 @@ function TodayPanel({
   onFileChange,
   charactersText,
   onCharactersChange,
+  listHidden,
+  practicing,
   onStart,
+  onStop,
   isImporting,
   status,
 }) {
@@ -54,17 +57,29 @@ function TodayPanel({
 
       <div className="field">
         <label htmlFor="chars">Character list</label>
-        <textarea
-          id="chars"
-          value={charactersText}
-          onChange={(event) => onCharactersChange(event.target.value)}
-          placeholder={"Try: 山水火木人\nSpaces and punctuation are ignored."}
-        />
+        {listHidden ? (
+          <div className="chars-hidden">
+            Hidden during practice. Stop practice to edit the list.
+          </div>
+        ) : (
+          <textarea
+            id="chars"
+            value={charactersText}
+            onChange={(event) => onCharactersChange(event.target.value)}
+            placeholder={"Try: 山水火木人\nSpaces and punctuation are ignored."}
+          />
+        )}
       </div>
 
-      <button className="wide" onClick={onStart} disabled={isImporting}>
-        {isImporting ? "Importing…" : "Start practice"}
-      </button>
+      {practicing ? (
+        <button className="wide secondary" onClick={onStop}>
+          Stop practice
+        </button>
+      ) : (
+        <button className="wide" onClick={onStart} disabled={isImporting}>
+          {isImporting ? "Importing…" : "Start practice"}
+        </button>
+      )}
       <div className="status" role="status">
         {status}
       </div>
@@ -303,7 +318,6 @@ function PracticeApp() {
   const [charactersText, setCharactersText] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
   const [sessionId, setSessionId] = useState(0);
-
   const canvasRef = useRef(null);
   const drawingRef = useRef(false);
   const exampleRequestsRef = useRef(new Map());
@@ -324,6 +338,8 @@ function PracticeApp() {
   const character = list[index] || "";
   const example = aiExamples[character] || null;
   const reviewSaved = reviewCharacters.includes(character);
+  const practicing = list.length > 0 && index < list.length;
+  const listHidden = isImporting || practicing;
 
   function stopReading() {
     readingTokenRef.current += 1;
@@ -558,6 +574,16 @@ function PracticeApp() {
     setStatus(`${sessionCharacters.length} characters ready.`);
   }
 
+  function stopSession() {
+    stopReading();
+    setList([]);
+    setIndex(0);
+    setRevealed(false);
+    setAiStatus("");
+    clearCanvas();
+    setStatus("Practice stopped. You can edit the list and start again.");
+  }
+
   async function startToday() {
     setMode("today");
 
@@ -751,7 +777,10 @@ function PracticeApp() {
               }
               charactersText={charactersText}
               onCharactersChange={setCharactersText}
+              listHidden={listHidden}
+              practicing={practicing}
               onStart={startToday}
+              onStop={stopSession}
               isImporting={isImporting}
               status={status}
             />
