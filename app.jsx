@@ -743,7 +743,10 @@ function PracticeApp() {
             <p>Listen · recall · write</p>
           </div>
         </div>
-        <div className="local">● Your practice stays in this browser</div>
+        <div className="top-right">
+          <div className="local">● Your practice stays in this browser</div>
+          <BackToDashboard />
+        </div>
       </header>
       <div className="voice-status">{voiceStatus}</div>
 
@@ -826,4 +829,94 @@ function PracticeApp() {
   );
 }
 
-createRoot(document.getElementById("root")).render(<PracticeApp />);
+function navigate(event, path) {
+  if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0)
+    return;
+  event.preventDefault();
+  window.history.pushState(null, "", path);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
+function BackToDashboard() {
+  return (
+    <a className="back-link" href="/" onClick={(event) => navigate(event, "/")}>
+      ← Dashboard
+    </a>
+  );
+}
+
+function Dashboard() {
+  return (
+    <main className="shell">
+      <header className="top">
+        <div className="brand">
+          <div className="logo">学</div>
+          <div>
+            <h1>Study Helper</h1>
+            <p>What would you like to work on today?</p>
+          </div>
+        </div>
+      </header>
+
+      <div className="dashboard">
+        <a
+          className="card dashboard-card"
+          href="/chinese"
+          onClick={(event) => navigate(event, "/chinese")}
+        >
+          <div className="dashboard-icon">字</div>
+          <h2>Practice Chinese</h2>
+          <p className="sub">Listen, recall and write Chinese characters.</p>
+        </a>
+        <a
+          className="card dashboard-card"
+          href="/math"
+          onClick={(event) => navigate(event, "/math")}
+        >
+          <div className="dashboard-icon">∑</div>
+          <h2>Math Helper</h2>
+          <p className="sub">Get help with math problems.</p>
+        </a>
+      </div>
+    </main>
+  );
+}
+
+function MathHelper() {
+  return (
+    <main className="shell">
+      <header className="top">
+        <div className="brand">
+          <div className="logo">∑</div>
+          <div>
+            <h1>Math Helper</h1>
+            <p>Coming soon</p>
+          </div>
+        </div>
+        <BackToDashboard />
+      </header>
+
+      <section className="card math-empty">
+        <p className="sub">The math helper isn't ready yet. Check back soon.</p>
+      </section>
+    </main>
+  );
+}
+
+function App() {
+  const [path, setPath] = useState(window.location.pathname);
+
+  useEffect(() => {
+    function handlePopState() {
+      setPath(window.location.pathname);
+    }
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  if (path === "/chinese") return <PracticeApp />;
+  if (path === "/math") return <MathHelper />;
+  return <Dashboard />;
+}
+
+createRoot(document.getElementById("root")).render(<App />);
