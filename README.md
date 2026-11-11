@@ -1,6 +1,6 @@
 # Chinese Character Practice
 
-A browser app for speaking and writing character practice. It imports text-based PDF sheets and pasted character lists. PDF reading and the device voice work offline; AI meanings, examples, and the warm AI voice need an OpenAI API key and internet access.
+A browser app for speaking and writing character practice. It imports text-based PDF sheets, `.txt` files, screenshots and photos of teaching material, and pasted character lists. PDF, text, and image reading and the device voice work offline; AI meanings and examples and the warm AI voice need an OpenAI API key and internet access.
 
 A single Python server (`server.py`) serves the page (`index.html`, `app.js`) and the API the browser calls:
 
@@ -8,12 +8,12 @@ A single Python server (`server.py`) serves the page (`index.html`, `app.js`) an
 | Endpoint               | Purpose                                              |
 | ---------------------- | ---------------------------------------------------- |
 | `GET /api/tts-status`  | Whether an API key is configured                     |
-| `POST /api/extract`    | Read the characters from an uploaded PDF             |
+| `POST /api/extract`    | Read the characters from an uploaded PDF, text file, or image |
 | `POST /api/ai-example` | Generate pinyin, meaning, example word, and sentence |
 | `POST /api/speech`     | Generate Mandarin speech (MP3)                       |
 
 
-The API key stays on the server and is never sent to the browser.python3.12 -m venv .venv
+The API key stays on the server and is never sent to the browser.
 
 ## `Project` layout
 
@@ -47,6 +47,8 @@ Then create the virtual environment:
 > python3.12 -m venv .venv
 > .venv/bin/pip install -r requirements.txt
 > ```
+
+This installs PaddlePaddle and PaddleOCR for image reading, about 1 GB.
 
 Build the frontend bundle (`app.js` is generated, not committed):
 
@@ -99,7 +101,16 @@ security delete-generic-password -s chinese-character-practice-openai
 
 ## Using the app
 
-Choose a daily PDF, or paste characters such as `山水火木人`, then choose **Start practice**. PDF import works for PDFs with selectable text. Scanned or image-only PDFs cannot be read without OCR; paste the characters instead.
+Choose a practice file, paste a screenshot, or type characters such as `山水火木人`, then choose **Start practice**.
+
+| Input | How characters are found |
+| --- | --- |
+| PDF | Selectable text is read on the server. Scanned or image-only PDFs have no text; take a screenshot of the page instead. |
+| `.txt` | Every Chinese character in the file, in order, without repeats. UTF-8, UTF-16 (with BOM), and GB18030/GBK are supported. |
+| PNG, JPEG, WebP, GIF | [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) (PP-OCRv5 server models) reads the characters on the server, top to bottom and left to right. No API key needed. Up to 10 MB. |
+| Screenshot | Copy a screenshot (on macOS, ⌘⌃⇧4 copies a selected area), then press ⌘V on the **Today** tab. |
+
+Every Chinese character in the image is imported, including titles and other visible text, so crop the screenshot to the material you want. A full page of 117 characters takes about 20 seconds on a laptop CPU; a small screenshot takes a few seconds. The first image after the server starts also loads the models (a few seconds). The models are downloaded to `~/.paddlex` the first time (about 165 MB); the Docker image includes them.
 
 While practising, select **Save for review** to keep a difficult character. The **Review** tab lists saved characters and starts a review session. Remove characters with the × beside them, or toggle the save button during practice.
 
@@ -117,7 +128,7 @@ Each request sends only the current character or practice prompt. API use is bil
 | `OPENAI_TTS_VOICE` | `coral`           |
 
 
-The server limits each client to 20 example and 45 speech requests per minute, with at most 4 AI requests running at once.
+The server limits each client to 20 example, 45 speech, and 10 image requests per minute, with at most 4 AI requests running at once. Images are read one at a time.
 
 ### Where data is stored
 
@@ -136,7 +147,9 @@ Refresh the browser to load the new bundle. The Docker image runs this build its
 
 ## Docker
 
-The `Dockerfile` builds `app.js` from source in a Node stage, then copies it into a Python image with the dependencies from `requirements.txt`. The container listens on port 8080.
+The `Dockerfile` builds `app.js` from source in a Node stage, then copies it into a Python image with the dependencies from `requirements.txt` and the PaddleOCR models. The container listens on port 8080.
+
+The image is `linux/amd64` only (about 2.6 GB): PaddlePaddle crashes on `linux/arm64`. On Apple Silicon, Docker runs it under emulation, so image reading is several times slower than with `.venv` (about 2 minutes for a full page).
 
 ```sh
 docker build -t chinese-character-practice:local .
@@ -191,7 +204,7 @@ security find-generic-password -s chinese-character-practice-openai -w | \
 
 ### Build, push, and deploy
 
-Cloud Run needs a `linux/amd64` image, so build for that platform even on Apple Silicon. Increase the tag (`v2`, `v3`, …) for each release.
+Cloud Run needs a `linux/amd64` image, so build for that platform even on Apple Silicon. Image reading needs about 1.3 GB of memory while it runs, hence `--memory=2Gi`; a full page can take over a minute on Cloud Run CPUs, hence `--timeout=300`. Increase the tag (`v2`, `v3`, …) for each release.
 
 ```sh
 export HANZI_IMAGE="${HANZI_REGION}-docker.pkg.dev/${HANZI_PROJECT_ID}/${HANZI_REPO}/${HANZI_SERVICE}:v2"
@@ -204,8 +217,9 @@ gcloud run deploy "$HANZI_SERVICE" \
   --region="$HANZI_REGION" \
   --allow-unauthenticated \
   --max=1 \
-  --memory=512Mi \
-  --timeout=60 \
+  --memory=2Gi \
+  --cpu=2 \
+  --timeout=300 \
   --concurrency=8 \
   --service-account="${HANZI_RUNTIME_SA}@${HANZI_PROJECT_ID}.iam.gserviceaccount.com" \
   --set-secrets="OPENAI_API_KEY=openai-api-key:1"
