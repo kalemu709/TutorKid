@@ -11,6 +11,8 @@ import {
 
 const CHINESE_CHARACTER = /^[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]$/;
 const CHINESE_CHARACTERS = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g;
+const PRACTICE_FILE_TYPES =
+  "application/pdf,text/plain,.txt,image/png,image/jpeg,image/webp,image/gif";
 
 function shuffle(items) {
   const result = [...items];
@@ -35,7 +37,7 @@ function getAiExampleAudio(example) {
 }
 
 function TodayPanel({
-  file,
+  fileInputRef,
   onFileChange,
   charactersText,
   onCharactersChange,
@@ -49,14 +51,17 @@ function TodayPanel({
   return (
     <>
       <h2>Today's sheet</h2>
-      <p className="sub">Load a daily PDF or enter a few characters.</p>
+      <p className="sub">
+        Load a PDF, text file, or screenshot, or enter a few characters.
+      </p>
 
       <div className="field">
-        <label htmlFor="pdf">Choose a practice PDF</label>
+        <label htmlFor="practice-file">Choose a practice file</label>
         <input
-          id="pdf"
+          id="practice-file"
+          ref={fileInputRef}
           type="file"
-          accept="application/pdf"
+          accept={PRACTICE_FILE_TYPES}
           onChange={onFileChange}
         />
       </div>
@@ -98,12 +103,13 @@ function TodayPanel({
         reveal the answer.
       </div>
       <p className="note">
-        PDFs need selectable text. If a sheet is scanned, paste its characters
-        into the box.
+        Accepts PDFs with selectable text, .txt files, and PNG, JPEG, WebP, or
+        GIF images. Paste a screenshot with ⌘V / Ctrl+V to use it directly.
       </p>
       <p className="note">
-        A PDF is sent temporarily to this service for text extraction and is not
-        saved there. Examples and review characters are saved only in this browser.
+        Files are sent temporarily to this service to extract characters and are
+        not saved there. Examples and review characters are saved only in this
+        browser.
       </p>
     </>
   );
@@ -327,6 +333,7 @@ function PracticeApp() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [sessionId, setSessionId] = useState(0);
   const canvasRef = useRef(null);
+  const fileInputRef = useRef(null);
   const drawingRef = useRef(false);
   const exampleRequestsRef = useRef(new Map());
   const readingTokenRef = useRef(0);
@@ -601,7 +608,11 @@ function PracticeApp() {
     }
 
     setIsImporting(true);
-    setStatus("Importing the sheet…");
+    setStatus(
+      selectedFile.type.startsWith("image/")
+        ? "Reading characters from the image…"
+        : "Importing the sheet…",
+    );
 
     try {
       const response = await fetch("/api/extract", {
@@ -610,7 +621,7 @@ function PracticeApp() {
       });
       const result = await response.json();
       if (!response.ok)
-        throw new Error(result.error || "Could not read the PDF");
+        throw new Error(result.error || "Could not read the file");
 
       const order = shuffle(result.characters);
       setCharactersText(result.characters.join(""));
@@ -739,6 +750,30 @@ function PracticeApp() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [revealed, list, index, sessionId]);
 
+  useEffect(() => {
+    if (mode !== "today") return undefined;
+
+    function handlePaste(event) {
+      const clipboard = event.clipboardData;
+      if (!clipboard || clipboard.getData("text/plain")) return;
+      const image = [...clipboard.files].find((item) =>
+        item.type.startsWith("image/"),
+      );
+      if (!image) return;
+      event.preventDefault();
+      if (fileInputRef.current) {
+        const transfer = new DataTransfer();
+        transfer.items.add(image);
+        fileInputRef.current.files = transfer.files;
+      }
+      setSelectedFile(image);
+      setStatus("Screenshot pasted. Choose Start practice to read its characters.");
+    }
+
+    document.addEventListener("paste", handlePaste);
+    return () => document.removeEventListener("paste", handlePaste);
+  }, [mode]);
+
   const tab = mode === "today" ? "today" : "review";
 
   return (
@@ -770,7 +805,7 @@ function PracticeApp() {
 
           {tab === "today" ? (
             <TodayPanel
-              file={selectedFile}
+              fileInputRef={fileInputRef}
               onFileChange={(event) =>
                 setSelectedFile(event.target.files?.[0] || null)
               }

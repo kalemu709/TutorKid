@@ -1,6 +1,6 @@
 # TutorKid / Study Helper
 
-Browser study helpers. Chinese character practice works today; math is a placeholder. The site stays usable anonymously. Sign-in adds accounts so progress can be saved server-side.
+Browser study helpers. Chinese character practice works today (PDF, text file, or screenshot import); math is a placeholder. The site stays usable anonymously. Sign-in adds accounts so progress can be saved server-side.
 
 ## What runs
 
@@ -18,7 +18,7 @@ Practice APIs:
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/tts-status` | Whether an API key is configured |
-| `POST /api/extract` | Read characters from an uploaded PDF |
+| `POST /api/extract` | Read characters from an uploaded PDF, text file, or image |
 | `POST /api/ai-example` | Generate pinyin, meaning, example word, sentence |
 | `POST /api/speech` | Generate Mandarin speech (MP3) |
 
