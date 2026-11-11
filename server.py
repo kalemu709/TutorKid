@@ -18,11 +18,27 @@ ROOT = Path(__file__).resolve().parent
 from pypdf import PdfReader
 
 HAN = re.compile(r"^[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]$")
-MAX_PDF_BYTES = 30 * 1024 * 1024
+HAN_ANY = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+TEXT_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+MAX_UPLOAD_BYTES = 30 * 1024 * 1024
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_PDF_PAGES = 100
+IMAGE_TYPES = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
 RATE_LOCK = threading.Lock()
 RATE_BUCKETS = defaultdict(deque)
 AI_SLOTS = threading.BoundedSemaphore(4)
+OCR_LOCK = threading.Lock()
+OCR_ENGINE = None
+OCR_DETECTION_MODEL = "PP-OCRv5_server_det"
+OCR_RECOGNITION_MODEL = "PP-OCRv5_server_rec"
+# A text box holding only one of these symbols is almost always the lookalike character.
+OCR_LOOKALIKES = {"+": "十", "＋": "十"}
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
 
 def response_text(result):
@@ -45,6 +61,124 @@ def upstream_error(exc):
     return f"The AI service returned HTTP {getattr(exc, 'code', 'error')}."
 
 
+class UploadTooLarge(Exception):
+    pass
+
+
+class OcrBusy(Exception):
+    pass
+
+
+def request_response(body, key, timeout):
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(upstream_error(exc)) from None
+    return response_text(result).strip()
+
+
+def unique_in_order(characters):
+    return list(dict.fromkeys(characters))
+
+
+def image_type(data):
+    for signature, mime in IMAGE_TYPES:
+        if data.startswith(signature):
+            return mime
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def decode_text(data):
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encodings = ("utf-16",)
+    else:
+        encodings = ("utf-8-sig", "gb18030")
+    for encoding in encodings:
+        try:
+            text = data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        if not TEXT_CONTROL.search(text):
+            return text
+    return None
+
+
+def pdf_characters(data):
+    reader = PdfReader(BytesIO(data), strict=False)
+    if len(reader.pages) > MAX_PDF_PAGES:
+        raise UploadTooLarge(f"This PDF has more than {MAX_PDF_PAGES} pages. Split it into smaller practice sheets.")
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    lines = [line.strip() for line in text.replace("\r", "\n").split("\n")]
+    characters = []
+    for index, line in enumerate(lines[:-1]):
+        if line.isdigit() and HAN.fullmatch(lines[index + 1]):
+            characters.append(lines[index + 1])
+    if not characters:
+        characters = [line for line in lines if HAN.fullmatch(line)]
+    return characters, len(reader.pages)
+
+
+def load_ocr():
+    global OCR_ENGINE
+    if OCR_ENGINE is None:
+        from paddleocr import TextDetection, TextRecognition
+        OCR_ENGINE = (
+            TextDetection(model_name=OCR_DETECTION_MODEL),
+            TextRecognition(model_name=OCR_RECOGNITION_MODEL),
+        )
+    return OCR_ENGINE
+
+
+def reading_order(boxes):
+    """Sort (top, bottom, left, right) boxes into rows, top to bottom, then left to right."""
+    rows = []
+    for box in sorted(boxes, key=lambda item: item[0]):
+        middle = (box[0] + box[1]) / 2
+        if rows and middle < rows[-1][0]:
+            rows[-1][1].append(box)
+        else:
+            rows.append([box[1], [box]])
+    return [box for _, row in rows for box in sorted(row, key=lambda item: item[2])]
+
+
+def image_characters(data):
+    import numpy
+    from PIL import Image
+
+    with Image.open(BytesIO(data)) as image:
+        pixels = numpy.ascontiguousarray(numpy.array(image.convert("RGB"))[:, :, ::-1])
+    height, width = pixels.shape[:2]
+    if not OCR_LOCK.acquire(timeout=30):
+        raise OcrBusy()
+    try:
+        detector, recognizer = load_ocr()
+        boxes = []
+        for polygon in detector.predict(pixels)[0]["dt_polys"]:
+            xs, ys = polygon[:, 0], polygon[:, 1]
+            top, bottom = max(int(ys.min()), 0), min(int(ys.max()) + 1, height)
+            left, right = max(int(xs.min()), 0), min(int(xs.max()) + 1, width)
+            if bottom > top and right > left:
+                boxes.append((top, bottom, left, right))
+        crops = [
+            numpy.ascontiguousarray(pixels[top:bottom, left:right])
+            for top, bottom, left, right in reading_order(boxes)
+        ]
+        texts = [item["rec_text"] for item in recognizer.predict(crops)] if crops else []
+    finally:
+        OCR_LOCK.release()
+    texts = [OCR_LOOKALIKES.get(text.strip(), text) for text in texts]
+    return unique_in_order(HAN_ANY.findall("".join(texts)))
+
+
 def generate_example(character, key):
     prompt = f"Create one accurate beginner Chinese character-learning entry for {character}."
     instructions = (
@@ -59,18 +193,7 @@ def generate_example(character, key):
         "input": prompt,
         "max_output_tokens": 350,
     }
-    req = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as response:
-            result = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(upstream_error(exc)) from None
-    raw = response_text(result).strip()
+    raw = request_response(body, key, timeout=30)
     try:
         parsed = json.loads(raw)
     except json.JSONDecodeError:
@@ -170,34 +293,58 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlsplit(self.path).path
         if path == "/api/extract":
-            return self.extract_pdf()
+            return self.extract_characters()
         if path == "/api/ai-example":
             return self.ai_example()
         if path == "/api/speech":
             return self.speech()
         return self.send_json(404, {"error": "Unknown endpoint."})
 
-    def extract_pdf(self):
+    def extract_characters(self):
         try:
-            data = self.read_body(MAX_PDF_BYTES)
-            if not data.startswith(b"%PDF-"):
-                return self.send_json(400, {"error": "Choose a valid PDF smaller than 30 MB."})
-            reader = PdfReader(BytesIO(data), strict=False)
-            if len(reader.pages) > MAX_PDF_PAGES:
-                return self.send_json(413, {"error": f"This PDF has more than {MAX_PDF_PAGES} pages. Split it into smaller practice sheets."})
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
-            lines = [line.strip() for line in text.replace("\r", "\n").split("\n")]
-            characters = []
-            for index, line in enumerate(lines[:-1]):
-                if line.isdigit() and HAN.fullmatch(lines[index + 1]):
-                    characters.append(lines[index + 1])
-            if not characters:
-                characters = [line for line in lines if HAN.fullmatch(line)]
-            if not characters:
-                return self.send_json(422, {"error": "No selectable Chinese characters found. Try a text-based PDF or paste characters into the box."})
-            return self.send_json(200, {"characters": characters, "pages": len(reader.pages)})
+            data = self.read_body(MAX_UPLOAD_BYTES)
+        except ValueError:
+            return self.send_json(400, {"error": "Choose a PDF, text file, or image smaller than 30 MB."})
+        if data.startswith(b"%PDF-"):
+            return self.extract_pdf(data)
+        if image_type(data):
+            return self.extract_image(data)
+        return self.extract_text(data)
+
+    def extract_pdf(self, data):
+        try:
+            characters, pages = pdf_characters(data)
+        except UploadTooLarge as exc:
+            return self.send_json(413, {"error": str(exc)})
         except Exception as exc:
             return self.send_json(400, {"error": "Could not read that PDF: " + str(exc)[:300]})
+        if not characters:
+            return self.send_json(422, {"error": "No selectable Chinese characters found. Try a text-based PDF, a screenshot, or paste characters into the box."})
+        return self.send_json(200, {"characters": characters, "pages": pages})
+
+    def extract_text(self, data):
+        text = decode_text(data)
+        if text is None:
+            return self.send_json(415, {"error": "Unsupported file. Choose a PDF, a UTF-8 or GB18030 text file, or a PNG, JPEG, WebP, or GIF image."})
+        characters = unique_in_order(HAN_ANY.findall(text))
+        if not characters:
+            return self.send_json(422, {"error": "No Chinese characters found in that text file."})
+        return self.send_json(200, {"characters": characters})
+
+    def extract_image(self, data):
+        if len(data) > MAX_IMAGE_BYTES:
+            return self.send_json(413, {"error": "Choose an image smaller than 10 MB."})
+        if not within_limit(self.client_ip(), "image", 10):
+            return self.send_json(429, {"error": "Image reading limit reached for this minute. Please wait and try again."})
+        try:
+            characters = image_characters(data)
+        except OcrBusy:
+            return self.send_json(503, {"error": "The image reader is busy. Try again shortly."})
+        except Exception as exc:
+            return self.send_json(400, {"error": "Could not read characters from that image: " + str(exc)[:300]})
+        if not characters:
+            return self.send_json(422, {"error": "No Chinese characters found in that image. Try a clearer or closer screenshot."})
+        return self.send_json(200, {"characters": characters})
 
     def ai_example(self):
         if not within_limit(self.client_ip(), "example", 20):
