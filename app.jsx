@@ -1,5 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import {
+  AccountPage,
+  AuthProvider,
+  SignInPage,
+  SignUpPage,
+  SiteHeader,
+  useAuth,
+} from "./auth-ui.jsx";
 
 const CHINESE_CHARACTER = /^[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]$/;
 const CHINESE_CHARACTERS = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g;
@@ -735,19 +743,7 @@ function PracticeApp() {
 
   return (
     <main className="shell">
-      <header className="top">
-        <div className="brand">
-          <div className="logo">字</div>
-          <div>
-            <h1>Character Practice</h1>
-            <p>Listen · recall · write</p>
-          </div>
-        </div>
-        <div className="top-right">
-          <div className="local">● Your practice stays in this browser</div>
-          <BackToDashboard />
-        </div>
-      </header>
+      <SiteHeader />
       <div className="voice-status">{voiceStatus}</div>
 
       <div className="layout">
@@ -837,26 +833,39 @@ function navigate(event, path) {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
-function BackToDashboard() {
-  return (
-    <a className="back-link" href="/" onClick={(event) => navigate(event, "/")}>
-      ← Dashboard
-    </a>
-  );
-}
-
 function Dashboard() {
+  const { auth } = useAuth();
+  const needsKid = auth.authenticated && auth.user?.role === "parent" && !auth.account;
+
   return (
     <main className="shell">
-      <header className="top">
-        <div className="brand">
-          <div className="logo">学</div>
-          <div>
-            <h1>Study Helper</h1>
-            <p>What would you like to work on today?</p>
-          </div>
-        </div>
-      </header>
+      <SiteHeader />
+
+      {needsKid ? (
+        <section className="card auth-card" style={{ marginBottom: 20 }}>
+          <h2>Select a kid to continue with saved progress</h2>
+          <p className="sub">
+            You can still practice anonymously below. To use account data,{" "}
+            <a href="/account" onClick={(event) => navigate(event, "/account")}>
+              choose or add a kid
+            </a>
+            .
+          </p>
+        </section>
+      ) : null}
+
+      {(auth.pending_guardian_requests || []).length > 0 ? (
+        <section className="card auth-card" style={{ marginBottom: 20 }}>
+          <h2>Guardian requests waiting</h2>
+          <p className="sub">
+            Open{" "}
+            <a href="/account" onClick={(event) => navigate(event, "/account")}>
+              Kids / account
+            </a>{" "}
+            to approve or decline.
+          </p>
+        </section>
+      ) : null}
 
       <div className="dashboard">
         <a
@@ -885,16 +894,7 @@ function Dashboard() {
 function MathHelper() {
   return (
     <main className="shell">
-      <header className="top">
-        <div className="brand">
-          <div className="logo">∑</div>
-          <div>
-            <h1>Math Helper</h1>
-            <p>Coming soon</p>
-          </div>
-        </div>
-        <BackToDashboard />
-      </header>
+      <SiteHeader />
 
       <section className="card math-empty">
         <p className="sub">The math helper isn't ready yet. Check back soon.</p>
@@ -914,9 +914,16 @@ function App() {
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
+  if (path === "/signin") return <SignInPage />;
+  if (path === "/signup") return <SignUpPage />;
+  if (path === "/account") return <AccountPage />;
   if (path === "/chinese") return <PracticeApp />;
   if (path === "/math") return <MathHelper />;
   return <Dashboard />;
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+createRoot(document.getElementById("root")).render(
+  <AuthProvider>
+    <App />
+  </AuthProvider>,
+);

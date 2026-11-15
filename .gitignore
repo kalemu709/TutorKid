@@ -17,6 +17,10 @@ app.js
 # Secrets
 .env
 .env.*
+env/local.env
+env/firebase-adminsdk.json
+env/*.pem
+env/*-adminsdk*.json
 
 # Local app data
 toreviw/

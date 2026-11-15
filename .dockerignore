@@ -12,3 +12,7 @@ toreviw/
 .env.*
 README.md
 app.js
+env/
+tests/
+docs/
+scripts/

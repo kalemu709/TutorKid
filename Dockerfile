@@ -4,7 +4,7 @@ WORKDIR /src
 COPY package.json package-lock.json ./
 RUN npm ci
 
-COPY app.jsx ./
+COPY app.jsx auth-ui.jsx ./
 RUN npm run build
 
 FROM python:3.13-slim
@@ -18,6 +18,8 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server.py index.html ./
+COPY auth ./auth
+COPY migrations ./migrations
 COPY --from=build /src/app.js ./
 
 EXPOSE 8080
