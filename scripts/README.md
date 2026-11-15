@@ -48,6 +48,7 @@ It deploys the files currently on disk, including uncommitted changes. Steps, in
    | Cloud Run setting | Value |
    |---|---|
    | Public access | `--allow-unauthenticated` |
+   | Memory / CPU / timeout | `--memory=$CLOUD_RUN_MEMORY` (default `2Gi`), `--cpu=$CLOUD_RUN_CPU` (default `2`), `--timeout=$CLOUD_RUN_TIMEOUT` (default `300`) — sized for PaddleOCR image read |
    | Cloud SQL | `--add-cloudsql-instances=$CLOUDSQL_CONNECTION` (socket at `/cloudsql/<connection>`) |
    | Runtime identity | `--service-account=$CLOUD_RUN_SERVICE_ACCOUNT` |
    | Secrets as env vars | `DATABASE_URL`, `FIREBASE_CREDENTIALS_JSON`, `OPENAI_API_KEY` (if set), all at version `latest` |

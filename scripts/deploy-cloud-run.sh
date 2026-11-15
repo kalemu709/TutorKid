@@ -152,13 +152,21 @@ ENV_VARS+=",FIREBASE_WEB_API_KEY=${FIREBASE_WEB_API_KEY}"
 ENV_VARS+=",FIREBASE_AUTH_DOMAIN=${FIREBASE_AUTH_DOMAIN}"
 ENV_VARS+=",FIREBASE_WEB_APP_ID=${FIREBASE_WEB_APP_ID}"
 
+CLOUD_RUN_MEMORY="${CLOUD_RUN_MEMORY:-2Gi}"
+CLOUD_RUN_CPU="${CLOUD_RUN_CPU:-2}"
+CLOUD_RUN_TIMEOUT="${CLOUD_RUN_TIMEOUT:-300}"
+
 step "Deploying Cloud Run service ${CLOUD_RUN_SERVICE}"
 echo "  secrets → $SECRET_FLAGS"
+echo "  resources → memory=${CLOUD_RUN_MEMORY} cpu=${CLOUD_RUN_CPU} timeout=${CLOUD_RUN_TIMEOUT}s"
 gcloud run deploy "$CLOUD_RUN_SERVICE" \
   --project="$GCP_PROJECT_ID" \
   --region="$GCP_REGION" \
   --image="$IMAGE" \
   --allow-unauthenticated \
+  --memory="$CLOUD_RUN_MEMORY" \
+  --cpu="$CLOUD_RUN_CPU" \
+  --timeout="$CLOUD_RUN_TIMEOUT" \
   --add-cloudsql-instances="$CLOUDSQL_CONNECTION" \
   --service-account="$CLOUD_RUN_SERVICE_ACCOUNT" \
   --set-secrets="$SECRET_FLAGS" \
