@@ -1,1 +1,4 @@
 pypdf==5.9.0
+psycopg[binary]==3.2.9
+psycopg-pool==3.2.6
+firebase-admin==7.1.0

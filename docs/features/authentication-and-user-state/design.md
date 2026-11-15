@@ -1,8 +1,8 @@
 ---
-status: draft
-code: not implemented yet
+status: accepted
+code: implemented
 depends_on: ../../architecture.md
-updated: 2026-11-12
+updated: 2026-11-15
 ---
 
 # Authentication and user state
@@ -15,7 +15,7 @@ The website stays usable anonymously, in a stateless way. This feature adds auth
 
 ### 1. Sign up
 
-A first-time user signs up with Google (Gmail) or an email link. The browser always asks their role: **parent** or **kid**. The server then applies the matching branch below. (Firebase does not distinguish sign-up from log-in; see [Sign in with Firebase](#sign-in-with-firebase).)
+A first-time user signs up with Google (Gmail) or email and password. The browser always asks their role: **parent** or **kid**. The server then applies the matching branch below. (Firebase does not distinguish sign-up from log-in for returning users matched by `firebase_uid`; see [Sign in with Firebase](#sign-in-with-firebase).)
 
 - **Parent, email free** (no user has this email): create the parent `user`, sign them in with `session.account_id` unset. Their first page is select-or-add a kid; they cannot use account data until a kid is selected (scenarios 2 and 4).
 - **Parent, email only on an unclaimed kid** (a `user` with this email, `role = 'kid'`, `firebase_uid` still `NULL` — someone else created a kid with this email): [release that email](#releasing-an-unclaimed-kid-email), then create the parent as above. The parent is never forced into the kid role. The old kid row and its account stay for whoever created them.
@@ -86,10 +86,11 @@ CREATE TABLE "user" (
   user_id       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   email         text,                                 -- NULL only on an unclaimed kid after email release
   name          text,                                 -- sign-in profile, or name a parent entered when adding the kid
-  role          text NOT NULL,                        -- 'parent' or 'kid' today; open for new roles
+  role          text NOT NULL,                        -- 'parent' or 'kid'
   firebase_uid  text UNIQUE,                          -- operational: NULL until this person has signed in
   created_at    timestamptz NOT NULL DEFAULT now(),   -- operational
-  CHECK (email IS NOT NULL OR (role = 'kid' AND firebase_uid IS NULL))
+  CHECK (email IS NOT NULL OR (role = 'kid' AND firebase_uid IS NULL)),
+  CHECK (role IN ('parent', 'kid'))
 );
 CREATE UNIQUE INDEX user_email_unique ON "user" (lower(email));
 ```
@@ -97,7 +98,7 @@ CREATE UNIQUE INDEX user_email_unique ON "user" (lower(email));
 - **`email`:** unique case-insensitively. Required for every parent and every signed-in user. May be `NULL` only for a kid with `firebase_uid IS NULL` after [email release](#releasing-an-unclaimed-kid-email) (kid declined takeover, or real owner signed up as parent). Matching "parent added this kid" always uses email.
 - **`name`:** from the sign-in profile on sign-up, or from the parent when adding a kid. Shown on accept-account and guardian-request screens.
 - **`firebase_uid`:** `NULL` for parent-created kids who have never signed in; set on first successful sign-in (accept path or normal kid/parent sign-up).
-- **`role`:** string validated by the server (`parent`, `kid`). Picked at sign-up; parent-created kids get `kid`.
+- **`role`:** `parent` or `kid`, validated by the server and by a `CHECK` constraint (adding a role needs a migration). Picked at sign-up; parent-created kids get `kid`.
 - **Role vs permissions:** inside a selected account, parent and kid can do the same things. Role only decides ownership/guardian shape and that parents must select a kid before account work.
 
 #### account
@@ -166,8 +167,8 @@ CREATE INDEX session_expires ON session (expires_at);
 
 ### Sign in with Firebase
 
-1. Browser signs in with Firebase (Google or email link) → Firebase ID token.
-2. Browser sends the token once. Server verifies with Firebase Admin SDK → Firebase uid + verified email.
+1. Browser signs in with Firebase (Google or email/password) → Firebase ID token. For a new email/password account, the browser sends Firebase's verification email and signs out; the token is exchanged only once the email is verified.
+2. Browser sends the token once. Server verifies with Firebase Admin SDK → Firebase uid + verified email. A token with `email_verified` not `true` is refused for every provider, because claiming a parent-created kid and releasing an email both trust the email.
 3. **`user` with this `firebase_uid` exists → log in** (scenario 5): create session as in step 5; do not ask role.
 4. **Otherwise → sign up** (scenario 1): browser sends chosen role; server branches:
    - **Kid + unclaimed kid email:** show accept/decline UI (guardians' names and emails).
@@ -177,7 +178,7 @@ CREATE INDEX session_expires ON session (expires_at);
    - **Parent + unclaimed kid email only:** one transaction: [release email](#releasing-an-unclaimed-kid-email), then insert parent `user`.
    - **Parent + free email:** insert parent `user`.
    - **Email owned by signed-in user or parent user:** refuse.
-5. Create `session`, set cookie (`HttpOnly`, `Secure`, `SameSite=Lax`); store only SHA-256 of the token.
+5. Create `session`, set cookie (`HttpOnly`, `Secure`, `SameSite=Lax`); store only SHA-256 of the token. `Secure` is dropped only for local HTTP development (`SESSION_COOKIE_SECURE=0`).
    - Kid → `session.account_id` = their owned account.
    - Parent → `session.account_id` = `NULL` → select-or-add-kid page.
 
@@ -237,8 +238,8 @@ Every read/write of account data uses `session.account_id`. Before use, verify t
 ### Stay signed in
 
 - Hash cookie → load session; missing / expired / revoked ⇒ treat as anonymous.
-- Update `last_seen_at` at most every few minutes.
-- Fixed lifetime (for example 14 days), then sign in again.
+- Update `last_seen_at` at most every 5 minutes.
+- Fixed lifetime (`SESSION_LIFETIME_DAYS`, default 14 days), then sign in again.
 - Mutations also require a custom header (for example `X-Requested-With`) with `SameSite=Lax` against CSRF.
 
 ### Log out

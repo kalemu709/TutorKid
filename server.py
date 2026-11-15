@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small, stateless web server for Chinese character practice."""
+"""Web server for TutorKid: practice APIs plus authentication."""
 from collections import defaultdict, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -17,12 +17,19 @@ import urllib.request
 ROOT = Path(__file__).resolve().parent
 from pypdf import PdfReader
 
+from auth.api import AuthApi
+from auth.db import Database, apply_migrations, database_url_from_env
+from auth.identity import IdentityError, create_identity_verifier
+from auth.service import AuthService
+
 HAN = re.compile(r"^[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]$")
 MAX_PDF_BYTES = 30 * 1024 * 1024
 MAX_PDF_PAGES = 100
 RATE_LOCK = threading.Lock()
 RATE_BUCKETS = defaultdict(deque)
 AI_SLOTS = threading.BoundedSemaphore(4)
+
+AUTH_API: AuthApi | None = None
 
 
 def response_text(result):
@@ -105,10 +112,22 @@ def within_limit(ip, name, limit, seconds=60):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "HanziPractice/1.0"
+    server_version = "TutorKid/1.0"
+
+    def __init__(self, *args, **kwargs):
+        self._queued_headers = []
+        super().__init__(*args, **kwargs)
 
     def log_message(self, fmt, *args):
         print("%s - %s" % (self.address_string(), fmt % args))
+
+    def queue_header(self, name, value):
+        self._queued_headers.append((name, value))
+
+    def _write_queued_headers(self):
+        for name, value in self._queued_headers:
+            self.send_header(name, value)
+        self._queued_headers = []
 
     def send_json(self, status, payload):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -116,6 +135,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self._write_queued_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -124,6 +144,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self._write_queued_headers()
         self.end_headers()
         self.wfile.write(body)
 
@@ -145,6 +166,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        if AUTH_API and path.startswith("/api/auth/"):
+            if AUTH_API.handle_get(self):
+                return
         if path == "/api/tts-status":
             return self.send_json(200, {"enabled": bool(os.environ.get("OPENAI_API_KEY", "").strip())})
         static = {
@@ -152,6 +176,9 @@ class Handler(BaseHTTPRequestHandler):
             "/index.html": ("index.html", "text/html; charset=utf-8"),
             "/chinese": ("index.html", "text/html; charset=utf-8"),
             "/math": ("index.html", "text/html; charset=utf-8"),
+            "/signin": ("index.html", "text/html; charset=utf-8"),
+            "/signup": ("index.html", "text/html; charset=utf-8"),
+            "/account": ("index.html", "text/html; charset=utf-8"),
             "/app.js": ("app.js", "application/javascript; charset=utf-8"),
         }
         item = static.get(path)
@@ -169,6 +196,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
+        if AUTH_API and path.startswith("/api/auth/"):
+            if AUTH_API.handle_post(self):
+                return
         if path == "/api/extract":
             return self.extract_pdf()
         if path == "/api/ai-example":
@@ -261,11 +291,32 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(502, {"error": "AI voice generation failed: " + str(exc)[:500]})
 
 
+def init_auth() -> AuthApi | None:
+    database_url = database_url_from_env()
+    if not database_url:
+        print("DATABASE_URL is not set; authentication APIs are disabled.")
+        return None
+    applied = apply_migrations(database_url)
+    if applied:
+        print("Applied migrations: " + ", ".join(applied))
+    else:
+        print("Database schema is up to date.")
+    db = Database(database_url)
+    service = AuthService(db)
+    try:
+        verifier = create_identity_verifier()
+    except IdentityError as exc:
+        print(f"Authentication identity verifier is not configured: {exc}")
+        raise
+    return AuthApi(service, verifier)
+
+
 if __name__ == "__main__":
+    AUTH_API = init_auth()
     default_port = int(sys.argv[1]) if len(sys.argv) > 1 else 8766
     port = int(os.environ.get("PORT", default_port))
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    print(f"Chinese Character Practice is ready on port {port}")
+    print(f"TutorKid is ready on port {port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
